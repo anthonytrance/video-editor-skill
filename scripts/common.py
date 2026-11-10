@@ -26,6 +26,19 @@ EXTRAS = {
 }
 MOVES = {'still', 'push', 'pull', 'punch', 'pan', 'fit'}
 
+# Where the video goes: default canvas, UI-safe area and length limit. A plan's own canvas or safe wins.
+# Full-screen destinations show anything that is not 9:16 with blank space around it.
+VERTICAL_UI = {'top': 0.14, 'bottom': 0.35, 'side': 0.06}
+DESTINATIONS = {
+    'reel': {'canvas': [1080, 1920], 'safe': VERTICAL_UI, 'max_s': 900, 'full_screen': True},
+    'story': {'canvas': [1080, 1920], 'safe': VERTICAL_UI, 'max_s': 60, 'full_screen': True},
+    'tiktok': {'canvas': [1080, 1920], 'safe': VERTICAL_UI, 'full_screen': True},
+    'shorts': {'canvas': [1080, 1920], 'safe': VERTICAL_UI, 'max_s': 180, 'full_screen': True},
+    'feed': {'canvas': [1080, 1350], 'safe': {'top': 0.04, 'bottom': 0.04, 'side': 0.04}},
+    'carousel': {'canvas': [1080, 1350], 'safe': {'top': 0.04, 'bottom': 0.04, 'side': 0.04}, 'max_s': 60},
+    'youtube': {'canvas': [1920, 1080], 'safe': {'top': 0.05, 'bottom': 0.1, 'side': 0.05}},
+}
+
 
 class PlanError(ValueError):
     pass
@@ -120,7 +133,11 @@ def load(plan_path):
     base = plan_path.parent
     b = brand(plan.get('brand'))
     resolve = lambda p: str((base / p).resolve()) if p and not Path(p).is_absolute() else p
-    cw, ch = plan.get('canvas', [1080, 1920])
+    dest = plan.get('destination')
+    if dest and dest not in DESTINATIONS:
+        raise PlanError(f"Unknown destination {dest!r}; use one of {', '.join(DESTINATIONS)}.")
+    preset = DESTINATIONS.get(dest, {})
+    cw, ch = plan.get('canvas', preset.get('canvas', [1080, 1920]))
     fps = plan.get('fps', 24)
     music = plan.get('music')
     if music:
@@ -165,7 +182,7 @@ def load(plan_path):
     grade = plan.get('grade', b.get('grade', 'none'))
     plan.update(_path=str(plan_path), _base=str(base), _brand=b, _bpm=bpm, _total=bounds[-1] / fps,
                 _frames=bounds[-1], _cw=cw, _ch=ch, _fps=fps,
-                _grade=GRADES.get(grade, grade), _safe=safe_zone(cw, ch, plan.get('safe')))
+                _grade=GRADES.get(grade, grade), _safe=safe_zone(cw, ch, plan.get('safe', preset.get('safe'))), _dest=preset)
     return plan
 
 
@@ -201,3 +218,24 @@ def crop_xy(info, cw, ch, cx=0.5, cy=0.5):
     x = min(max(0, round(cx * info['width'] - ww / 2)), info['width'] - ww)
     y = min(max(0, round(cy * info['height'] - wh / 2)), info['height'] - wh)
     return ww, wh, x, y
+
+
+def picture_box(s, plan):
+    """The framed picture area of a shot, or None when it fills the canvas.
+
+    Plan-level "picture" applies to every shot; a shot's own "picture" overrides it, and "full" makes it fill the canvas.
+    """
+    p = s.get('picture', plan.get('picture'))
+    if not p or p == 'full':
+        return None
+    cw, ch = plan['_cw'], plan['_ch']
+    w, h = (int(v) // 2 * 2 for v in p['size'])
+    x = (cw - w) // 2 if p.get('x', 'center') == 'center' else int(p['x'])
+    y = (ch - h) // 2 if p.get('y', 'center') == 'center' else int(p['y'])
+    return {'w': w, 'h': h, 'x': x, 'y': y, 'bg': p.get('background', 'black')}
+
+
+def target(s, plan):
+    """Pixel size a shot's picture is cropped and scaled to."""
+    box = picture_box(s, plan)
+    return (box['w'], box['h']) if box else (plan['_cw'], plan['_ch'])

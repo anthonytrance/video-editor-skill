@@ -12,7 +12,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from common import MOVES, PlanError, binary, crop_xy, load, probe, when
+from common import MOVES, PlanError, binary, crop_xy, load, picture_box, probe, target, when
 
 
 def _frame_bits(s, plan):
@@ -22,7 +22,7 @@ def _frame_bits(s, plan):
     cx, cy = fr.get('cx', 0.5), fr.get('cy', 0.5)
     cx = sum(cx) / 2 if isinstance(cx, list) else cx
     cy = sum(cy) / 2 if isinstance(cy, list) else cy
-    ww, wh, x, y = crop_xy(info, plan['_cw'], plan['_ch'], cx, cy)
+    ww, wh, x, y = crop_xy(info, *target(s, plan), cx, cy)
     t = s['in'] + s['dur'] * s.get('speed', 1.0) / 2
     raw = subprocess.run([binary('ffmpeg'), '-v', 'error', '-ss', f'{t:.3f}', '-i', s['src'], '-frames:v', '1',
                           '-vf', f'crop={ww}:{wh}:{x}:{y},scale=9:8:flags=area', '-pix_fmt', 'rgb24', '-f', 'rawvideo', '-'],
@@ -70,8 +70,17 @@ def check(plan, looks=True, bars=True):
     cw, ch, fps, total = plan['_cw'], plan['_ch'], plan['_fps'], plan['_total']
     safe = plan['_safe']
     shots = plan['shots']
+    dest = plan['_dest']
+    if dest.get('max_s') and total > dest['max_s']:
+        errors.append(f"{plan['destination']} videos can be at most {dest['max_s']}s; this edit is {total:.1f}s.")
+    if dest.get('full_screen') and abs(cw / ch - 9 / 16) > 0.01:
+        warnings.append(f"{plan['destination']} plays full screen at 9:16; a {cw}x{ch} canvas gets blank space around it. "
+                        'For a square or 4:5 look keep a 9:16 canvas and use a "picture" box with a designed background.')
     for s in shots:
         n = f"shot {s['index']}"
+        box = picture_box(s, plan)
+        if box and (box['x'] < 0 or box['y'] < 0 or box['x'] + box['w'] > cw or box['y'] + box['h'] > ch):
+            errors.append(f"{n}: the picture box {box['w']}x{box['h']} at {box['x']},{box['y']} does not fit the {cw}x{ch} canvas.")
         if not Path(s['src']).exists():
             errors.append(f"{n}: source {s['src']} not found.")
             continue
@@ -174,7 +183,7 @@ def check(plan, looks=True, bars=True):
             fr = s.get('frame', {})
             cx = fr.get('cx', 0.5)
             cx = cx if not isinstance(cx, list) else cx[0]
-            ww, wh, x, y = crop_xy(info, cw, ch, cx, fr.get('cy', 0.5) if not isinstance(fr.get('cy'), list) else 0.5)
+            ww, wh, x, y = crop_xy(info, *target(s, plan), cx, fr.get('cy', 0.5) if not isinstance(fr.get('cy'), list) else 0.5)
             got = _bars(s['src'], s['in'], min(s['dur'] * s.get('speed', 1.0), 6), f'{ww}:{wh}:{x}:{y}')
             if got and (got[0] < ww * 0.96 or got[1] < wh * 0.96):
                 warnings.append(f"shot {s['index']}: the framed picture has black edges ({got[0]}x{got[1]} of {ww}x{wh}). "
@@ -193,10 +202,13 @@ def check_render(plan, out):
     if not info['audio']:
         errors.append('render has no sound track.')
     for s in plan['shots']:
-        got = _bars(out, s['start'] + 0.05, max(0.1, s['dur'] - 0.1))
-        if got and (got[0] < cw * 0.95 or got[1] < ch * 0.95):
+        box = picture_box(s, plan)
+        region = f"{box['w']}:{box['h']}:{box['x']}:{box['y']}" if box else None
+        pw, ph = target(s, plan)
+        got = _bars(out, s['start'] + 0.05, max(0.1, s['dur'] - 0.1), region)
+        if got and (got[0] < pw * 0.95 or got[1] < ph * 0.95):
             warnings.append(f"shot {s['index']} ({s['start']:.1f}s to {s['end']:.1f}s) may have black bars: "
-                            f"picture area {got[0]}x{got[1]} of {cw}x{ch}.")
+                            f"picture area {got[0]}x{got[1]} of {pw}x{ph}.")
     r = subprocess.run([binary('ffmpeg'), '-v', 'info', '-i', str(out), '-vf', 'blackdetect=d=0.15:pix_th=0.06',
                         '-an', '-f', 'null', '-'], capture_output=True, text=True, errors='replace')
     for a, b in re.findall(r'black_start:([\d.]+) black_end:([\d.]+)', r.stderr):

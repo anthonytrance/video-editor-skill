@@ -31,6 +31,7 @@ def plan(work, name='edit.json', **over):
          'overlays': [{'text': 'HELLO', 'size': 30, 'y': 200, 't': [0, 'shot1.end']},
                       {'dim': 0.5, 't': ['shot3.start+0.5', None]}]}
     p.update(over)
+    p = {k: v for k, v in p.items() if v is not None}
     path = work / name
     path.write_text(json.dumps(p), encoding='utf-8')
     return path
@@ -79,3 +80,32 @@ def test_draft_render(work):
     info = probe(out)
     assert (info['width'], info['height']) == (180, 320)
     assert abs(info['duration'] - 8.0) < 0.1 and info['audio']
+
+
+def test_destination_presets(work):
+    p = load(plan(work, 'dest.json', destination='carousel', canvas=None))
+    assert (p['_cw'], p['_ch']) == (1080, 1350)
+    assert p['_safe']['bottom'] == round(0.04 * 1350)
+    errors, _ = validate.check(load(plan(work, 'story.json', destination='story', duration=70,
+                                         shots=[{'src': 'a.mp4', 'in': 0, 'len': 'rest'}])), looks=False, bars=False)
+    assert any('at most 60s' in e for e in errors)
+    _, warnings = validate.check(load(plan(work, 'sq.json', destination='reel', canvas=[360, 360])),
+                                 looks=False, bars=False)
+    assert any('blank space' in w for w in warnings)
+
+
+def test_framed_picture_render(work):
+    shots = [{'src': 'a.mp4', 'in': 0, 'len': '2bar', 'picture': 'full'},
+             {'src': 'b.mp4', 'in': 1, 'len': '1bar', 'frame': {'move': 'pan', 'cx': [0.3, 0.7]}},
+             {'src': 'a.mp4', 'in': 5, 'len': 'rest', 'frame': {'move': 'punch'},
+              'picture': {'size': [360, 360], 'y': 100, 'background': 'blur'}}]
+    path = plan(work, 'framed.json', shots=shots, picture={'size': [360, 360], 'background': '#202020'})
+    p = load(path)
+    errors, _ = validate.check(p, looks=True, bars=False)
+    assert errors == []
+    out = work / 'framed.mp4'
+    subprocess.run(render.build(p, out), check=True)
+    from common import probe
+    assert (probe(out)['width'], probe(out)['height']) == (360, 640)
+    errs, warns = validate.check_render(p, out)
+    assert errs == [] and not any('black bars' in w for w in warns)

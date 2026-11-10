@@ -12,7 +12,7 @@ Every shot shows a different moment. The checker blocks reused footage, but vari
 
 ## Framing for vertical
 
-A 9:16 window from 16:9 footage is about a third of the width. Put the subject's face or the action at roughly a third from the top or centre, never cut heads, and keep the subject out of the bottom third where captions and the app UI sit. Two people far apart don't fit: choose one, or `pan` from one to the other over 2 bars. Never pad with black bars or a blurred box unless the owner asks.
+A 9:16 window from 16:9 footage is about a third of the width. Put the subject's face or the action at roughly a third from the top or centre, never cut heads, and keep the subject out of the bottom third where captions and the app UI sit. Two people far apart don't fit: choose one, or `pan` from one to the other over 2 bars. Never pad with black bars or a blurred box (the `fit` move) unless the owner asks. A framed picture on a designed background is a different thing, chosen deliberately (see formats.md). Reels are previewed in the feed through a central 4:5 window and on the grid through a 3:4 one, so the hook and the key text must read in the centre.
 
 ## Pace
 

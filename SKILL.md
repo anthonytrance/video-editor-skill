@@ -1,6 +1,6 @@
 ---
 name: video-editor
-description: Edit short videos from raw footage with FFmpeg: afterparty and gig reels, shout-outs, talking clips mixed with gig footage, travel or vlog stories, and any hybrid. A JSON edit plan drives frame-exact cuts, 16:9 to 9:16 reframing, moves, grade, text, logos, music and ducked speech; a checker blocks reused footage, letterboxing and text under the app UI; Gemini logs footage and critiques renders. Use for any multi-shot edit, recut or "make a reel/aftermovie/clip from this footage".
+description: Edit short videos from raw footage with FFmpeg: afterparty and gig reels, shout-outs, talking clips mixed with gig footage, travel or vlog stories, and any hybrid. A JSON edit plan drives frame-exact cuts, 16:9 to 9:16 reframing, moves, grade, text, logos, music and ducked speech; a checker blocks reused footage, letterboxing and text under the app UI; knows each destination (Reel, Story, carousel, feed, TikTok, Shorts, YouTube) and designs like a framed square inside a 9:16 Reel; Gemini logs footage and critiques renders. Use for any multi-shot edit, recut or "make a reel/aftermovie/clip from this footage".
 ---
 
 # Video editor
@@ -20,11 +20,11 @@ Every request is a mix. Don't look for a matching template. Instead decide four 
    Speech: the words set the length, picture cuts at phrase ends, music ducks under the voice (`audio_db` on the talking shot, lengths in seconds).
    Story or chronology: arrival, build, moment, afterglow; cut on action and place changes, music is a bed.
    A hybrid switches spine per section: a 6 second shout-out on speech, then gig footage on the beat; or a travel story on chronology with a beat-cut montage at the gig.
-2. **Format and length.** Canvas and fps (9:16 1080x1920 for Reels, Shorts, TikTok and Stories; 1:1 or 4:5 for feed; 16:9 for YouTube), length from the platform and the material, not a fixed number.
+2. **Destination and design.** Where it goes (Reel, Story, carousel, feed, TikTok, Shorts, YouTube) and how to use that space: full bleed, a framed square or 4:5 picture on a designed background, or both switching per shot. Choose from the footage and the purpose, not by habit; a wide moment that a 9:16 crop would ruin may want a framed Reel, a carousel or a 16:9 recap. Read [references/formats.md](references/formats.md) for what each platform does with the picture and when each design fits. Length follows the destination and the material.
 3. **Must-haves.** Named people who must appear and be recognisable, a logo, a date, a thank-you, a specific moment, a caption line. Ask only if the brief truly leaves one open.
 4. **Sound layers.** Music only; music plus crowd or ambience peeks; speech with music under it; speech only. Speech gets captions (see Captions below).
 
-Then write the plan. [references/examples.md](references/examples.md) shows four worked briefs (afterparty reel, shout-out, shout-out into gig footage, travel story) as reasoning, not as types to copy. [references/craft.md](references/craft.md) has the editing rules that apply to all of them.
+Then write the plan, with `"destination"` set so the canvas, safe area and length limit follow. [references/examples.md](references/examples.md) shows four worked briefs (afterparty reel, shout-out, shout-out into gig footage, travel story) as reasoning, not as types to copy. [references/craft.md](references/craft.md) has the editing rules that apply to all of them.
 
 ## Workflow
 
@@ -51,4 +51,4 @@ The look-alike check is a picture hash plus mean colour: it catches the same mom
 
 ## Files
 
-`scripts/common.py` plan loader, timing maths, probe, brand, grades. `scripts/render.py` the one-pass renderer. `scripts/validate.py` the checker. `scripts/sheet.py` contact sheets. `scripts/gemini.py` logging and review. References: [edit-format.md](references/edit-format.md), [craft.md](references/craft.md), [examples.md](references/examples.md), [brand.md](references/brand.md).
+`scripts/common.py` plan loader, timing maths, probe, brand, grades. `scripts/render.py` the one-pass renderer. `scripts/validate.py` the checker. `scripts/sheet.py` contact sheets. `scripts/gemini.py` logging and review. References: [formats.md](references/formats.md), [edit-format.md](references/edit-format.md), [craft.md](references/craft.md), [examples.md](references/examples.md), [brand.md](references/brand.md).

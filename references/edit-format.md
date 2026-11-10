@@ -5,6 +5,7 @@ One JSON file describes the whole edit. Relative paths resolve from the plan's f
 ```json
 {
   "title": "what this is",
+  "destination": "reel",
   "canvas": [1080, 1920],
   "fps": 24,
   "duration": 31.375,
@@ -21,7 +22,11 @@ One JSON file describes the whole edit. Relative paths resolve from the plan's f
 
 ## Top level
 
-`canvas` [width, height], default 1080x1920. `fps` default 24 (match the footage's cadence feel; 25 or 30 are fine). `duration` is the total length, needed when a shot uses `"len": "rest"`; it accepts the same units as shot lengths. `grade` names a look from `common.GRADES` (`club`, `natural`, `none`) or is a raw FFmpeg filter chain; default from the brand file. `fade_out` is the audio fade at the end in seconds. `loudnorm` is a target LUFS such as -14, off by default: don't normalise a DJ mix that is already mastered. `max_mb` warns when the render is bigger (Telegram bots take 50 MB). `brand` overrides the brand file path. `safe` overrides the UI-safe area as fractions or pixels: `{"top": 0.14, "bottom": 0.35, "side": 0.06}` is the vertical default. `allow_fit: true` permits the boxed `fit` move. `min_gap` (seconds, default 2) sets when two shots from one clip count as too close. `cut_on_beat: false` silences the off-beat warnings on speech or story spines. `crf` sets quality, default 18.
+`destination` is one of `reel`, `story`, `tiktok`, `shorts`, `feed`, `carousel`, `youtube` ([formats.md](formats.md)); it sets the default canvas and safe area, blocks edits longer than the destination allows (Reel 900s, Story 60s, Shorts 180s, carousel slide 60s), and warns when a full-screen destination gets a canvas that isn't 9:16. `canvas` [width, height], default from the destination, else 1080x1920. `fps` default 24 (match the footage's cadence feel; 25 or 30 are fine). `duration` is the total length, needed when a shot uses `"len": "rest"`; it accepts the same units as shot lengths. `grade` names a look from `common.GRADES` (`club`, `natural`, `none`) or is a raw FFmpeg filter chain; default from the brand file. `fade_out` is the audio fade at the end in seconds. `loudnorm` is a target LUFS such as -14, off by default: don't normalise a DJ mix that is already mastered. `max_mb` warns when the render is bigger (Telegram bots take 50 MB). `brand` overrides the brand file path. `safe` overrides the UI-safe area as fractions or pixels: `{"top": 0.14, "bottom": 0.35, "side": 0.06}` is the vertical default. `allow_fit: true` permits the boxed `fit` move. `min_gap` (seconds, default 2) sets when two shots from one clip count as too close. `cut_on_beat: false` silences the off-beat warnings on speech or story spines. `crf` sets quality, default 18.
+
+## picture (framed designs)
+
+`"picture": {"size": [1080, 1080], "x": "center", "y": 400, "background": "blur"}` puts every shot into that box inside the canvas instead of filling it. The crop window follows the box's ratio, so `cx` still means the same thing, and all moves work inside the box. `background` is a colour (`"black"`, `"#0b0b14"`) or `"blur"` (the same shot filling the canvas, blurred and darkened). A shot's own `"picture"` overrides the plan's, and `"picture": "full"` makes that shot fill the canvas. Text and logos go in the bands; the safe-area check still applies. The render check looks for black bars inside the box only.
 
 ## music
 

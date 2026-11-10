@@ -3,7 +3,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from common import EXTRAS, GRADES, PlanError, binary, crop_xy, load, probe, when
+from common import EXTRAS, GRADES, PlanError, binary, crop_xy, load, picture_box, probe, target, when
 import validate
 
 SMOOTH = '(3*{q}*{q}-2*{q}*{q}*{q})'  # ease in and out
@@ -19,30 +19,42 @@ def esc_text(t):
 
 def shot_video(i, s, plan, draft):
     cw, ch, fps = plan['_cw'], plan['_ch'], plan['_fps']
+    box = picture_box(s, plan)
+    tw, th = target(s, plan)  # the picture: the whole canvas, or a framed box inside it
     info = probe(s['src'])
     fr = dict(s.get('frame', {}))
     move = fr.get('move', 'still')
     n = s['f1'] - s['f0']
     D = s['dur']
     speed = s.get('speed', 1.0)
-    head = f"[{i}:v]setpts=PTS/{speed},fps={fps},trim=end_frame={n},setpts=PTS-STARTPTS,"
     cx, cy = fr.get('cx', 0.5), fr.get('cy', 0.5)
+    start = f"[{i}:v]setpts=PTS/{speed},fps={fps},trim=end_frame={n},setpts=PTS-STARTPTS"
+    pre = ''
+    if box and box['bg'] == 'blur':
+        # Background: the same shot, filling the canvas, blurred and darkened.
+        bx = cx[0] if isinstance(cx, list) else cx
+        ww, wh, x, y = crop_xy(info, cw, ch, bx, 0.5)
+        pre = (start + f",split[m{i}][k{i}];[k{i}]crop={ww}:{wh}:{x}:{y},scale={cw // 4}:{ch // 4},boxblur=12:2,"
+               f"scale={cw}:{ch},eq=brightness=-0.18,setsar=1[bg{i}];")
+        head = f'[m{i}]'
+    else:
+        head = start + ','
     if move == 'fit':
-        ww, wh, x, y = crop_xy(info, cw, ch, cx if not isinstance(cx, list) else cx[0], 0.5)
-        chain = (head + f"split[f{i}][b{i}];[b{i}]crop={ww}:{wh}:{x}:{y},scale={cw // 2}:{ch // 2},boxblur=18:3,"
-                 f"scale={cw}:{ch},eq=brightness=-0.10[bb{i}];"
-                 f"[f{i}]scale={cw}:{ch}:force_original_aspect_ratio=decrease:force_divisible_by=2[ff{i}];"
+        ww, wh, x, y = crop_xy(info, tw, th, cx if not isinstance(cx, list) else cx[0], 0.5)
+        chain = (head + f"split[f{i}][b{i}];[b{i}]crop={ww}:{wh}:{x}:{y},scale={tw // 2}:{th // 2},boxblur=18:3,"
+                 f"scale={tw}:{th},eq=brightness=-0.10[bb{i}];"
+                 f"[f{i}]scale={tw}:{th}:force_original_aspect_ratio=decrease:force_divisible_by=2[ff{i}];"
                  f"[bb{i}][ff{i}]overlay=(W-w)/2:(H-h)/2,")
     elif move == 'pan':
         xs = cx if isinstance(cx, list) else [cx, cx]
         ys = cy if isinstance(cy, list) else [cy, cy]
-        ww, wh, x0, y0 = crop_xy(info, cw, ch, xs[0], ys[0])
-        _, _, x1, y1 = crop_xy(info, cw, ch, xs[1], ys[1])
+        ww, wh, x0, y0 = crop_xy(info, tw, th, xs[0], ys[0])
+        _, _, x1, y1 = crop_xy(info, tw, th, xs[1], ys[1])
         q = SMOOTH.format(q=f'min(1\\,t/{D:.3f})')
         chain = head + (f"crop={ww}:{wh}:x='{x0}+({x1}-{x0})*{q}':y='{y0}+({y1}-{y0})*{q}',"
-                        f"scale={cw}:{ch},")
+                        f"scale={tw}:{th},")
     else:
-        ww, wh, x, y = crop_xy(info, cw, ch, cx, cy)
+        ww, wh, x, y = crop_xy(info, tw, th, cx, cy)
         z = fr.get('zoom', {'push': 1.06, 'pull': 1.06, 'punch': 1.12}.get(move, 1.0))
         Z = {'still': None,
              'push': f'(1+{z - 1:.4f}*t/{D:.3f})',
@@ -50,19 +62,23 @@ def shot_video(i, s, plan, draft):
              'punch': f'(1+{z - 1:.4f}*max(0\\,1-t/{fr.get("decay", 0.4)}))'}[move]
         chain = head + f"crop={ww}:{wh}:{x}:{y},"
         if Z:
-            chain += (f"scale=w='trunc({cw}*{Z}/2)*2':h='trunc({ch}*{Z}/2)*2':eval=frame,"
-                      f"crop={cw}:{ch},")
+            chain += (f"scale=w='trunc({tw}*{Z}/2)*2':h='trunc({th}*{Z}/2)*2':eval=frame,"
+                      f"crop={tw}:{th},")
         else:
-            chain += f"scale={cw}:{ch},"
+            chain += f"scale={tw}:{th},"
     extras = s.get('extra', [])
     extras = [extras] if isinstance(extras, str) else extras
     look = [EXTRAS.get(e, e) for e in extras]
     grade = s.get('grade')
     g = plan['_grade'] if grade is None else GRADES.get(grade, grade)
     tail = ','.join(f for f in ['setsar=1', *look, g] if f)
-    if draft:
-        tail += f',scale={cw // 2}:{ch // 2}'
-    return chain + tail + f'[v{i}]'
+    half = f',scale={cw // 2}:{ch // 2}' if draft else ''
+    if not box:
+        return chain + tail + half + f'[v{i}]'
+    if box['bg'] != 'blur':
+        pre += f"color=c={box['bg']}:s={cw}x{ch}:r={fps}:d={D + 0.2:.3f},setsar=1[bg{i}];"
+    return (pre + chain + tail + f'[p{i}];'
+            f"[bg{i}][p{i}]overlay={box['x']}:{box['y']}:shortest=1,setsar=1{half}[v{i}]")
 
 
 def build(plan, out, draft=False):
