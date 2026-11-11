@@ -1,10 +1,13 @@
 """Offline tests: tiny synthetic clips, no network. Run with pytest from this folder."""
 import json
+import os
 import subprocess
+import zipfile
 
 import pytest
 
 from common import PlanError, binary, load, seconds, when
+import cleanup
 import render
 import validate
 
@@ -221,6 +224,64 @@ def test_delivery_report(work):
     for expected in ('Delivery report: Test edit', 'Destination: reel', 'Colour:', 'Loudness:', 'Shots (3):',
                      '"HELLO" from 0.00s', 'picture dimmed to 50%', 'Not checked by a machine'):
         assert expected in text, expected
+
+
+def project(tmp_path):
+    p = tmp_path / '2026-01-01-night'
+    for d in ('src', 'out', 'proxy', 'review', 'log'):
+        (p / d).mkdir(parents=True)
+    (p / 'edit.json').write_text('{}', encoding='utf-8')
+    (p / 'brief.txt').write_text('a thank-you reel', encoding='utf-8')
+    (p / 'log' / 'clip.json').write_text('{}', encoding='utf-8')
+    (p / 'src' / 'clip.mp4').write_bytes(b'camera original' * 1000)
+    (p / 'proxy' / 'clip.mp4').write_bytes(b'proxy')
+    (p / 'review' / 'sheet.jpg').write_bytes(b'jpg')
+    for i, name in enumerate(('v1.mp4', 'v2.mp4', 'v3.mp4')):
+        f = p / 'out' / name
+        f.write_bytes(name.encode() * 500)
+        os.utime(f, (1_700_000_000 + i, 1_700_000_000 + i))
+    return p
+
+
+def test_cleanup_tidy_keeps_only_the_newest_render(tmp_path):
+    p = project(tmp_path)
+    assert cleanup.tidy(p, [], confirm=False) == 0
+    assert len(list((p / 'out').iterdir())) == 3  # a dry run deletes nothing
+    cleanup.tidy(p, [], confirm=True)
+    assert [f.name for f in (p / 'out').iterdir()] == ['v3.mp4']
+    assert (p / 'src' / 'clip.mp4').exists()
+
+
+def test_cleanup_close_deletes_only_what_is_proven_stored(tmp_path):
+    p = project(tmp_path)
+    listing = tmp_path / 'stored.json'
+    # nothing proven: big files and keepers stay, only what can be made again goes
+    assert cleanup.close(p, [], [], confirm=True) == 1
+    assert (p / 'src' / 'clip.mp4').exists() and (p / 'out' / 'v3.mp4').exists() and (p / 'edit.json').exists()
+    assert not (p / 'proxy').exists() and not (p / 'out' / 'v1.mp4').exists()
+    # footage and render proven, the keepers zip not yet: the keepers stay
+    z = p / f'{p.name}-project.zip'
+    first = cleanup.content_hash(z)
+    names = zipfile.ZipFile(z).namelist()
+    assert {'edit.json', 'brief.txt', 'log/clip.json', 'big-files.txt'} <= set(names)
+    listing.write_text(json.dumps({'files': [{'content_hash': cleanup.content_hash(p / 'src' / 'clip.mp4')},
+                                             {'content_hash': cleanup.content_hash(p / 'out' / 'v3.mp4')}]}))
+    assert cleanup.close(p, [], [str(listing)], confirm=True) == 1
+    assert not (p / 'src').exists() and (p / 'edit.json').exists() and z.exists()
+    # the zip is rebuilt identically, so the hash taken at upload time still proves it
+    cleanup.close(p, [], [], confirm=False)
+    assert zipfile.ZipFile(z).read('edit.json') == b'{}'
+    listing.write_text(json.dumps([{'name': z.name, 'content_hash': cleanup.content_hash(z)}]))
+    assert cleanup.close(p, [], [str(listing)], confirm=True) == 0
+    assert not p.exists()
+    assert first  # hash of the first pack existed before any upload
+
+
+def test_cleanup_refuses_a_folder_that_is_no_project(tmp_path):
+    (tmp_path / 'holiday').mkdir()
+    (tmp_path / 'holiday' / 'photo.jpg').write_bytes(b'x')
+    with pytest.raises(SystemExit):
+        cleanup.check_project(tmp_path / 'holiday')
 
 
 def test_skill_header_is_valid_yaml():
