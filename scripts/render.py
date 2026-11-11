@@ -3,7 +3,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from common import EXTRAS, GRADES, PlanError, binary, crop_xy, load, picture_box, probe, target, when
+from common import EXTRAS, GRADES, TONEMAP, PlanError, binary, crop_xy, load, picture_box, probe, target, when
 import validate
 
 SMOOTH = '(3*{q}*{q}-2*{q}*{q}*{q})'  # ease in and out
@@ -34,7 +34,8 @@ def shot_video(i, s, plan, draft):
         # Background: the same shot, filling the canvas, blurred and darkened.
         bx = cx[0] if isinstance(cx, list) else cx
         ww, wh, x, y = crop_xy(info, cw, ch, bx, 0.5)
-        pre = (start + f",split[m{i}][k{i}];[k{i}]crop={ww}:{wh}:{x}:{y},scale={cw // 4}:{ch // 4},boxblur=12:2,"
+        sdr = f',{TONEMAP}' if info.get('hdr') else ''
+        pre = (start + f",split[m{i}][k{i}];[k{i}]crop={ww}:{wh}:{x}:{y},scale={cw // 4}:{ch // 4}{sdr},boxblur=12:2,"
                f"scale={cw}:{ch},eq=brightness=-0.18,setsar=1[bg{i}];")
         head = f'[m{i}]'
     else:
@@ -71,7 +72,7 @@ def shot_video(i, s, plan, draft):
     look = [EXTRAS.get(e, e) for e in extras]
     grade = s.get('grade')
     g = plan['_grade'] if grade is None else GRADES.get(grade, grade)
-    tail = ','.join(f for f in ['setsar=1', *look, g] if f)
+    tail = ','.join(f for f in ['setsar=1', TONEMAP if info.get('hdr') else '', *look, g] if f)
     half = f',scale={cw // 2}:{ch // 2}' if draft else ''
     if not box:
         return chain + tail + half + f'[v{i}]'
@@ -147,40 +148,58 @@ def build(plan, out, draft=False):
         fc.append(f"[{cur}]subtitles={esc_path(plan['captions']['file'])}[cap]")
         cur = 'cap'
 
-    # Audio: shot sound (voices, ambience) on one bus, music under it, ducked while the bus is active.
-    voice = []
+    # Audio. Shot sound and extra "sound" items go on two buses: one that dips the music (voices) and one that
+    # sits on top of it untouched (crowd, ambience). Music runs under both.
+    STEREO = 'aresample=48000,aformat=channel_layouts=stereo'
+    duckers, plain = [], []
     for i, s in enumerate(shots):
         if s.get('audio_db') is None:
             continue
         D, speed = s['dur'], s.get('speed', 1.0)
         tempo = f',atempo={speed}' if speed != 1.0 else ''
-        ms = round(s['start'] * 1000)
+        ms, af = round(s['start'] * 1000), s.get('afade', 0.03)
         fc.append(f"[{i}:a]atrim=0:{D * speed:.3f},asetpts=PTS-STARTPTS{tempo},volume={s['audio_db']}dB,"
-                  f"afade=t=in:d={s.get('afade', 0.03)},afade=t=out:st={max(0, D - s.get('afade', 0.03)):.3f}:d={s.get('afade', 0.03)},"
-                  f"aresample=48000,adelay={ms}|{ms}[sa{i}]")
-        voice.append(f'[sa{i}]')
+                  f"afade=t=in:d={af},afade=t=out:st={max(0, D - af):.3f}:d={af},"
+                  f"{STEREO},adelay={ms}:all=1[sa{i}]")
+        (duckers if s.get('duck', True) else plain).append(f'[sa{i}]')
+    for j, x in enumerate(plan.get('sound', [])):
+        args += ['-ss', f"{x.get('in', 0):.3f}", '-t', f"{x['_len']:.3f}", '-i', x['src']]
+        idx = len([v for v in args if v == '-i']) - 1
+        ms, af, L = round(x['_at'] * 1000), x.get('afade', 0.03), x['_len']
+        fc.append(f"[{idx}:a]asetpts=PTS-STARTPTS,volume={x.get('db', 0)}dB,"
+                  f"afade=t=in:d={af},afade=t=out:st={max(0, L - af):.3f}:d={af},"
+                  f"{STEREO},adelay={ms}:all=1[sx{j}]")
+        (duckers if x.get('duck', True) else plain).append(f'[sx{j}]')
+    for name, bus in (('vox', duckers), ('amb', plain)):
+        if bus:
+            fc.append(''.join(bus) + f'amix=inputs={len(bus)}:normalize=0:dropout_transition=0[{name}]')
     music = plan.get('music')
     mix = []
-    if voice:
-        fc.append(''.join(voice) + f'amix=inputs={len(voice)}:normalize=0:dropout_transition=0[vox]')
     if music:
         args += ['-ss', str(music.get('start', 0)), '-t', f'{total:.3f}', '-i', music['file']]
-        mi = len([a for a in args if a == '-i']) - 1
-        fc.append(f"[{mi}:a]aresample=48000,volume={music.get('gain_db', 0)}dB[mus]")
-        if voice and music.get('duck', True):
+        mi = len([v for v in args if v == '-i']) - 1
+        fc.append(f"[{mi}:a]{STEREO},volume={music.get('gain_db', 0)}dB[mus]")
+        if duckers and music.get('duck', True):
             fc.append('[vox]asplit[vox1][vox2]')
             d = music.get('duck_ratio', 8)
             fc.append(f'[mus][vox2]sidechaincompress=threshold=0.02:ratio={d}:attack=20:release=400[mduck]')
             mix = ['[mduck]', '[vox1]']
         else:
-            mix = ['[mus]'] + (['[vox]'] if voice else [])
-    elif voice:
+            mix = ['[mus]'] + (['[vox]'] if duckers else [])
+    elif duckers:
         mix = ['[vox]']
+    if plain:
+        mix.append('[amb]')
     if mix:
+        # Level: loudnorm when asked; otherwise leave headroom, because AAC encoding of a full-scale master
+        # overshoots by about 1 dB and clips. Layers that add up get a safety limiter; a lone master is not touched.
+        if plan.get('loudnorm'):
+            level = f",loudnorm=I={plan['loudnorm']}:TP=-1.5:LRA=11"
+        else:
+            level = f",volume=-{plan.get('headroom_db', 2.5)}dB" + (',alimiter=limit=0.84:level=false' if len(mix) > 1 else '')
         fc.append(''.join(mix) + (f'amix=inputs={len(mix)}:normalize=0:dropout_transition=0,' if len(mix) > 1 else 'anull,')
                   + f"apad,atrim=0:{total:.3f},afade=t=out:st={max(0, total - plan.get('fade_out', 0.6)):.3f}:d={plan.get('fade_out', 0.6)}"
-                  + (f",loudnorm=I={plan['loudnorm']}:TP=-1:LRA=11" if plan.get('loudnorm') else '')
-                  + ',aresample=48000[a]')
+                  + level + ',aresample=48000[a]')
     else:
         fc.append(f'anullsrc=r=48000:cl=stereo,atrim=0:{total:.3f}[a]')
 

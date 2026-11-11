@@ -109,3 +109,123 @@ def test_framed_picture_render(work):
     assert (probe(out)['width'], probe(out)['height']) == (360, 640)
     errs, warns = validate.check_render(p, out)
     assert errs == [] and not any('black bars' in w for w in warns)
+
+
+# ---------- sound: buses, ducking, headroom, sync ----------
+
+def band_db(path, freq, t0, dur):
+    """Mean level of one tone in a stretch of a file."""
+    import re
+    r = subprocess.run([binary('ffmpeg'), '-hide_banner', '-nostats', '-ss', str(t0), '-t', str(dur), '-i', str(path), '-vn',
+                        '-af', f'bandpass=f={freq}:t=h:w=40,volumedetect', '-f', 'null', '-'],
+                       capture_output=True, text=True, errors='replace')
+    return float(re.search(r'mean_volume: (-?[\d.]+) dB', r.stderr).group(1))
+
+
+def silent_shots():
+    return [{'src': 'a.mp4', 'in': 0, 'len': 2}, {'src': 'b.mp4', 'in': 0, 'len': 2}, {'src': 'a.mp4', 'in': 4, 'len': 2}]
+
+
+def test_voice_over_other_pictures_ducks_music(work):
+    # The voice of a.mp4 (440 Hz) runs from 2s to 4s, under the pictures of b.mp4; the music (220 Hz) dips there.
+    path = plan(work, 'vo.json', shots=silent_shots(), duration=None, overlays=[],
+                music={'file': 'music.wav', 'start': 0},
+                sound=[{'src': 'a.mp4', 'in': 1, 'len': 2, 'at': 'shot2.start', 'db': 12}])
+    p = load(path)
+    assert validate.check(p, looks=False, bars=False)[0] == []
+    out = work / 'vo.mp4'
+    subprocess.run(render.build(p, out, draft=True), check=True)
+    assert band_db(out, 440, 2.3, 1.4) > band_db(out, 440, 0.2, 1.4) + 20      # voice only where placed
+    assert band_db(out, 220, 2.5, 1.2) < band_db(out, 220, 0.2, 1.4) - 3       # music dips under it
+
+
+def test_ambience_does_not_duck_music(work):
+    path = plan(work, 'amb.json', shots=silent_shots(), duration=None, overlays=[],
+                music={'file': 'music.wav', 'start': 0},
+                sound=[{'src': 'a.mp4', 'in': 1, 'len': 2, 'at': 2, 'db': 12, 'duck': False}])
+    p = load(path)
+    out = work / 'amb.mp4'
+    subprocess.run(render.build(p, out, draft=True), check=True)
+    assert band_db(out, 440, 2.3, 1.4) > band_db(out, 440, 0.2, 1.4) + 20
+    assert abs(band_db(out, 220, 2.5, 1.2) - band_db(out, 220, 0.2, 1.4)) < 1.5
+
+
+def test_sound_outside_the_edit_is_an_error(work):
+    p = load(plan(work, 'late.json', shots=silent_shots(), duration=None, overlays=[],
+                  sound=[{'src': 'a.mp4', 'in': 0, 'len': 3, 'at': 5}]))
+    assert any('outside' in e for e in validate.check(p, looks=False, bars=False)[0])
+
+
+def test_full_scale_master_gets_headroom(work):
+    ff = binary('ffmpeg')
+    subprocess.run([ff, '-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=f=220:d=20', '-af', 'volume=18dB',
+                    str(work / 'loud.wav')], check=True)
+    p = load(plan(work, 'loud.json', shots=silent_shots(), duration=None, overlays=[], music={'file': 'loud.wav', 'start': 0}))
+    out = work / 'loud.mp4'
+    subprocess.run(render.build(p, out), check=True)
+    lufs, peak = validate.loudness(out)
+    assert peak is not None and peak <= -1.0
+    assert not any('peaks at' in w for w in validate.check_render(p, out)[1])
+
+
+def test_music_sync_moves_the_grid(work):
+    # Speech for 2.3s, then the music section: track time 6.0 (a downbeat) must fall on the cut into shot 2.
+    shots = [{'src': 'a.mp4', 'in': 0, 'len': 2.3, 'audio_db': 0},
+             {'src': 'b.mp4', 'in': 0, 'len': '1bar'}, {'src': 'a.mp4', 'in': 4, 'len': '1bar'}]
+    p = load(plan(work, 'sync.json', shots=shots, duration=None, overlays=[],
+                  music={'file': 'music.wav', 'bpm': 120, 'sync': {'track': 6.0, 'at': 'shot2.start'}}))
+    assert abs(p['music']['start'] - (6.0 - p['shots'][1]['start'])) < 1e-9
+    errors, warnings = validate.check(p, looks=False, bars=False)
+    assert errors == [] and not any('off the beat' in w for w in warnings)
+    early = load(plan(work, 'sync2.json', shots=shots, duration=None, overlays=[],
+                      music={'file': 'music.wav', 'bpm': 120, 'sync': {'track': 1.0, 'at': 'shot2.start'}}))
+    assert any('before the track begins' in e for e in validate.check(early, looks=False, bars=False)[0])
+
+
+# ---------- phone footage: HDR and frame rate ----------
+
+def test_hdr_and_odd_frame_rate_sources(work):
+    ff = binary('ffmpeg')
+    made = subprocess.run([ff, '-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=s=640x360:r=30:d=6',
+                           '-f', 'lavfi', '-i', 'sine=f=440:d=6', '-shortest', '-c:v', 'libx264', '-pix_fmt', 'yuv420p10le',
+                           '-x264-params', 'colorprim=bt2020:transfer=arib-std-b67:colormatrix=bt2020nc',
+                           '-c:a', 'aac', str(work / 'hlg.mp4')])
+    if made.returncode:
+        pytest.skip('this FFmpeg cannot write a 10-bit HLG test clip')
+    from common import probe
+    assert probe(work / 'hlg.mp4')['hdr'] is True
+    shots = [{'src': 'hlg.mp4', 'in': 0, 'len': 2}, {'src': 'a.mp4', 'in': 0, 'len': 2},
+             {'src': 'hlg.mp4', 'in': 3, 'len': 2, 'picture': {'size': [360, 360], 'background': 'blur'}}]
+    p = load(plan(work, 'hdr.json', shots=shots, duration=None, overlays=[]))
+    errors, warnings = validate.check(p, looks=False, bars=False)
+    assert errors == []
+    assert any('HDR footage' in w for w in warnings) and any('not a multiple' in w for w in warnings)
+    out = work / 'hdr.mp4'
+    subprocess.run(render.build(p, out, draft=True), check=True)
+    assert abs(probe(out)['duration'] - 6.0) < 0.1
+
+
+# ---------- brief, report, skill header ----------
+
+def test_missing_brief_is_flagged(work):
+    p = load(plan(work, 'nobrief.json'))
+    assert any('brief.txt' in w for w in validate.check(p, looks=False, bars=False)[1])
+
+
+def test_delivery_report(work):
+    import report
+    p = load(plan(work, 'rep.json', title='Test edit', destination='reel'))
+    out = work / 'rep.mp4'
+    subprocess.run(render.build(p, out), check=True)
+    text = report.build(p, out)
+    for expected in ('Delivery report: Test edit', 'Destination: reel', 'Colour:', 'Loudness:', 'Shots (3):',
+                     '"HELLO" from 0.00s', 'picture dimmed to 50%', 'Not checked by a machine'):
+        assert expected in text, expected
+
+
+def test_skill_header_is_valid_yaml():
+    yaml = pytest.importorskip('yaml')
+    from pathlib import Path
+    text = (Path(__file__).resolve().parent.parent / 'SKILL.md').read_text(encoding='utf-8')
+    head = yaml.safe_load(text.split('---')[1])
+    assert head['name'] == 'video-editor' and len(head['description']) > 200

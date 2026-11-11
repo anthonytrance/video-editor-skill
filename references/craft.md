@@ -16,7 +16,7 @@ A 9:16 window from 16:9 footage is about a third of the width. Put the subject's
 
 ## Pace
 
-Music spine: 1 to 3 bars per shot, faster into the drop, a punch on the drop, a longer hold for the closer. Speech spine: cut where the speaker breathes or ends a phrase, never mid-word; B-roll over speech starts and ends on phrase boundaries too. Story spine: cut on action (a step, a turn, a door) and give each place a beat to land. Mix lengths; a uniform rhythm feels mechanical.
+Music spine: 1 to 3 bars per shot, faster into the drop, a punch on the drop, a longer hold for the closer. Speech spine: cut where the speaker breathes or ends a phrase, never mid-word; Pictures laid over a running voice (a `sound` item) start and end on phrase boundaries too, and show what is being said at that moment. Story spine: cut on action (a step, a turn, a door) and give each place a beat to land. Mix lengths; a uniform rhythm feels mechanical.
 
 ## Ending
 
@@ -36,7 +36,7 @@ One grade for the whole edit keeps different cameras together. `club` deepens bl
 
 ## Sound
 
-Music edits: start the track on a downbeat, ideally a few bars before a drop, and cut with the grid. Speech: keep the voice at 0 dB, music ducked under it by the sidechain (on by default), and a short fade on each speech shot. Crowd peaks (a cheer, a sing-along) can sit on top of the music with `audio_db` around -6. Don't loudness-normalise a mastered DJ mix; use `loudnorm` -14 only when shot sound dominates.
+Music edits: start the track on a downbeat, ideally a few bars before a drop, and cut with the grid. Speech: keep the voice at 0 dB, music ducked under it by the sidechain (on by default), and a short fade on each speech shot. Crowd peaks (a cheer, a sing-along) can sit on top of the music with `audio_db` around -6. Don't loudness-normalise a mastered DJ mix, but never deliver it at full scale either: the default headroom exists because the first reel went out peaking 0.9 dB over full scale after AAC encoding. Use `loudnorm` -14 when voices or ambience carry the edit. Phone voices are often far quieter than a master: measure before mixing (`ffmpeg -i clip.mp4 -af ebur128 -f null -` prints the loudness) and raise `audio_db` or `db` until the voice is clearly above the music. A starting point, not a platform rule: voice around -16 LUFS on its own, music 12 to 18 dB under it while someone speaks. Crowd and ambience go on top with `"duck": false`.
 
 ## Size and delivery
 

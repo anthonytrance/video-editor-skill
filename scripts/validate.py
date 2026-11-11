@@ -65,12 +65,26 @@ def _text_box(o):
     return r - l, b
 
 
+def loudness(path):
+    """Integrated loudness (LUFS) and true peak (dBTP) of a file's sound, or (None, None)."""
+    r = subprocess.run([binary('ffmpeg'), '-hide_banner', '-nostats', '-i', str(path), '-vn', '-af', 'ebur128=peak=true',
+                        '-f', 'null', '-'], capture_output=True, text=True, errors='replace')
+    tail = r.stderr[r.stderr.rfind('Summary:'):]
+    i = re.search(r'I:\s+(-?[\d.]+) LUFS', tail)
+    p = re.search(r'Peak:\s+(-?[\d.]+) dBFS', tail)
+    return (float(i.group(1)) if i else None, float(p.group(1)) if p else None)
+
+
 def check(plan, looks=True, bars=True):
     errors, warnings = [], []
     cw, ch, fps, total = plan['_cw'], plan['_ch'], plan['_fps'], plan['_total']
     safe = plan['_safe']
     shots = plan['shots']
     dest = plan['_dest']
+    if not (Path(plan['_base']) / 'brief.txt').exists():
+        warnings.append('no brief.txt next to the plan. Write the brief first (purpose, destination, who is in the footage '
+                        'and how to tell them apart, music section, must-haves); ask the owner for what is missing.')
+    odd_fps, hdr = set(), set()
     if dest.get('max_s') and total > dest['max_s']:
         errors.append(f"{plan['destination']} videos can be at most {dest['max_s']}s; this edit is {total:.1f}s.")
     if dest.get('full_screen') and abs(cw / ch - 9 / 16) > 0.01:
@@ -85,6 +99,11 @@ def check(plan, looks=True, bars=True):
             errors.append(f"{n}: source {s['src']} not found.")
             continue
         info = probe(s['src'])
+        if info.get('hdr'):
+            hdr.add(Path(s['src']).name)
+        ratio = info.get('fps', 0) / fps if fps else 0
+        if s.get('speed', 1.0) == 1.0 and ratio and abs(ratio - round(ratio)) > 0.02:
+            odd_fps.add(f"{Path(s['src']).name} ({info['fps']:.4g} fps)")
         need = s['dur'] * s.get('speed', 1.0)
         if s['in'] < 0 or s['in'] + need > info['duration'] + 0.05:
             errors.append(f"{n}: needs {s['in']:.2f}s to {s['in'] + need:.2f}s but {Path(s['src']).name} is {info['duration']:.2f}s long.")
@@ -100,6 +119,26 @@ def check(plan, looks=True, bars=True):
             errors.append(f'{n}: audio_db is set but the source has no sound.')
         if s.get('audio_db') is not None and not 0.5 <= s.get('speed', 1.0) <= 2:
             errors.append(f'{n}: sound can only follow a speed between 0.5 and 2; mute it instead.')
+    if hdr:
+        warnings.append(f"HDR footage ({', '.join(sorted(hdr))}) is converted to normal video automatically. "
+                        'Check its colour and brightness on the contact sheet next to the other shots.')
+    if odd_fps:
+        warnings.append(f"the plan is {fps} fps but {', '.join(sorted(odd_fps))} is not a multiple of it, so frames are "
+                        'dropped unevenly and movement can stutter. Set the plan "fps" to match most of the footage.')
+    # Extra sound placed on the timeline.
+    for k, a in enumerate(plan.get('sound', []), 1):
+        n = f'sound {k}'
+        if not Path(a['src']).exists():
+            errors.append(f"{n}: {a['src']} not found.")
+            continue
+        info = probe(a['src'])
+        if not info['audio']:
+            errors.append(f"{n}: {Path(a['src']).name} has no sound.")
+        if a.get('in', 0) < 0 or a.get('in', 0) + a['_len'] > info['duration'] + 0.05:
+            errors.append(f"{n}: needs {a.get('in', 0):.2f}s to {a.get('in', 0) + a['_len']:.2f}s but "
+                          f"{Path(a['src']).name} is {info['duration']:.2f}s long.")
+        if a['_at'] < 0 or a['_at'] + a['_len'] > total + 0.05:
+            errors.append(f"{n}: plays from {a['_at']:.2f}s to {a['_at'] + a['_len']:.2f}s, outside the {total:.2f}s edit.")
     # Reused footage: the same stretch of a source in two shots.
     by_src = {}
     for s in shots:
@@ -158,6 +197,9 @@ def check(plan, looks=True, bars=True):
     if music:
         if not Path(music['file']).exists():
             errors.append(f"music {music['file']} not found.")
+        elif music.get('start', 0) < 0:
+            errors.append(f"music would have to start {-music['start']:.2f}s before the track begins; "
+                          'pick a later point of the track for music.sync.')
         else:
             left = probe(music['file'])['duration'] - music.get('start', 0)
             if left < total - 0.05:
@@ -165,8 +207,15 @@ def check(plan, looks=True, bars=True):
         bpm = plan['_bpm']
         if bpm and plan.get('cut_on_beat', True):
             beat = 60 / bpm
+            origin = music.get('_grid', 0.0)
+            spoken = [(a['_at'], a['_at'] + a['_len']) for a in plan.get('sound', []) if a.get('duck', True)]
             for s in shots[1:]:
-                off = s['start'] - round(s['start'] / beat) * beat
+                if s.get('audio_db') is not None and s.get('duck', True):
+                    continue  # a talking shot follows the words, not the beat
+                if any(t0 < s['start'] < t1 - 1 / fps for t0, t1 in spoken):
+                    continue  # so does a cut made while a voice runs over the pictures
+                rel = s['start'] - origin
+                off = rel - round(rel / beat) * beat
                 if abs(off) > 1.5 / fps:
                     warnings.append(f"shot {s['index']} starts at {s['start']:.2f}s, {off * 1000:+.0f}ms off the beat.")
     if plan.get('captions', {}).get('file') and not Path(plan['captions']['file']).exists():
@@ -201,6 +250,11 @@ def check_render(plan, out):
         warnings.append(f"render is {info['duration']:.2f}s, plan says {total:.2f}s.")
     if not info['audio']:
         errors.append('render has no sound track.')
+    else:
+        lufs, peak = loudness(out)
+        if peak is not None and peak > -1.0:
+            warnings.append(f'sound peaks at {peak:+.1f} dB true peak (loudness {lufs} LUFS); above -1 dB it can distort '
+                            'when the platform re-encodes it. Raise "headroom_db" or lower the loudest layer.')
     for s in plan['shots']:
         box = picture_box(s, plan)
         region = f"{box['w']}:{box['h']}:{box['x']}:{box['y']}" if box else None

@@ -25,6 +25,10 @@ EXTRAS = {
     'lift': 'eq=brightness=0.04:gamma=1.08',
 }
 MOVES = {'still', 'push', 'pull', 'punch', 'pan', 'fit'}
+# Phones record HLG or PQ by default; shown as SDR without conversion they look grey and washed out.
+HDR_TRANSFERS = {'arib-std-b67', 'smpte2084'}
+TONEMAP = ('zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=hable:desat=0,'
+           'zscale=t=bt709:m=bt709:r=tv,format=yuv420p')
 
 # Where the video goes: default canvas, UI-safe area and length limit. A plan's own canvas or safe wins.
 # Full-screen destinations show anything that is not 9:16 with blank space around it.
@@ -77,7 +81,8 @@ def probe(path):
         if abs(rot) % 180 == 90:
             w, h = h, w
         num, den = (v.get('avg_frame_rate') or '0/1').split('/')
-        info.update(width=w, height=h, fps=float(num) / float(den) if float(den) else 0.0, video=True)
+        info.update(width=w, height=h, fps=float(num) / float(den) if float(den) else 0.0, video=True,
+                    hdr=v.get('color_transfer') in HDR_TRANSFERS)
     else:
         info['video'] = False
     _probe_cache[path] = info
@@ -164,6 +169,16 @@ def load(plan_path):
         s['f0'], s['f1'] = bounds[i], bounds[i + 1]
         s['start'], s['end'] = bounds[i] / fps, bounds[i + 1] / fps
         s['dur'] = (bounds[i + 1] - bounds[i]) / fps
+    plan['_total'] = bounds[-1] / fps
+    if music and music.get('sync'):
+        # "This point of the track falls at this point of the edit": the grid then counts from there.
+        at = when(music['sync']['at'], plan)
+        music['start'] = music['sync']['track'] - at
+        music['_grid'] = at
+    for a in plan.get('sound', []):
+        a['src'] = resolve(a['src'])
+        a['_at'] = when(a.get('at', 0), plan)
+        a['_len'] = seconds(a['len'], bpm, fps)
     assets = b.get('assets', {})
     for o in plan.get('overlays', []):
         if 'text' in o and not o.get('font'):
